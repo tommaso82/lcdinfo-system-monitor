@@ -1,0 +1,57 @@
+name: Publish v1.0.0
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-v1.0.0.yml'
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: release-v1.0.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: '45467087962'
+      SOURCE_SHA: '6f1469621eb6e8d6f16824de44124b0845aa1eee'
+    steps:
+      - name: Verify source run and publish portable binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v1.0.0 --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release already exists; no changes made."
+            exit 0
+          fi
+          run_info=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN")
+          test "$(jq -r .head_sha <<< "$run_info")" = "$SOURCE_SHA"
+          test "$(jq -r .conclusion <<< "$run_info")" = success
+          gh run download "$SOURCE_RUN" --repo "$GH_REPO" --name LCDInfoSystemMonitor-x64 --dir x64
+          gh run download "$SOURCE_RUN" --repo "$GH_REPO" --name LCDInfoSystemMonitor-Win32 --dir x86
+          (cd x64 && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -)
+          (cd x86 && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -)
+          mkdir dist
+          cp x64/LCDInfoSystemMonitor.exe dist/LCDInfoSystemMonitor-x64.exe
+          cp x86/LCDInfoSystemMonitor.exe dist/LCDInfoSystemMonitor-x86.exe
+          (cd dist && sha256sum *.exe > SHA256SUMS.txt)
+          cat > notes.md <<'EOF'
+          First native C++ release for the LCDInfo USB display (0403:E300).
+
+          - Portable standalone x86 and x64 Windows executables.
+          - Big Digits layout, CPU/RAM/GPU, network traffic, uptime and clock.
+          - Direct WinUSB communication, differential framebuffer updates.
+          - Notification-area icon with right-click Exit.
+          - No brightness, contrast or EEPROM writes.
+
+          Choose one executable for your architecture. Install the WinUSB binding first, following the [Windows setup guide](https://github.com/tommaso82/lcdinfo-system-monitor/blob/v1.0.0/docs/windows-setup.md).
+
+          Both architectures compiled and passed the automated framebuffer tests. Native USB communication was tested on Windows 10. Windows 7–11 is the compatibility target; older Windows versions and the corrected tray behavior still require physical validation. GPU counters may be unavailable on older systems.
+
+          SHA256SUMS.txt is optional verification metadata.
+          EOF
+          gh release create v1.0.0 dist/* --repo "$GH_REPO" --target "$SOURCE_SHA" --title "LCDInfo System Monitor v1.0.0" --notes-file notes.md
