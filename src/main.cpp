@@ -9,6 +9,7 @@
 namespace {
 constexpr UINT TrayMsg=WM_APP+1;
 constexpr UINT ExitId=100;
+constexpr UINT_PTR TrayRetry=1;
 HANDLE stop_event=nullptr;
 UINT taskbar_created=0;
 NOTIFYICONDATAW tray{};
@@ -17,25 +18,49 @@ void add_tray(HWND hwnd){
     tray={};tray.cbSize=sizeof tray;tray.hWnd=hwnd;tray.uID=1;
     tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=TrayMsg;
     tray.hIcon=owned_icon;wcscpy_s(tray.szTip,L"LCDInfo System Monitor");
-    Shell_NotifyIconW(NIM_ADD,&tray);
+    if(Shell_NotifyIconW(NIM_ADD,&tray)) KillTimer(hwnd,TrayRetry);
+    else SetTimer(hwnd,TrayRetry,2000,nullptr);
 }
 HICON make_icon(){
-    // Monochrome 16x16 monitor and bars, no external icon dependency.
-    BYTE and_mask[32],xor_mask[32]{};
-    memset(and_mask,0xff,sizeof and_mask);
-    auto point=[&](int x,int y){int i=y*2+x/8;BYTE bit=BYTE(0x80>>(x%8));and_mask[i]&=BYTE(~bit);xor_mask[i]|=bit;};
-    for(int x=1;x<=14;++x){point(x,1);point(x,12);}
-    for(int y=1;y<=12;++y){point(1,y);point(14,y);}
-    for(int x=5;x<=10;++x)point(x,15);
-    point(7,13);point(8,13);point(7,14);point(8,14);
-    for(int x=3;x<=4;++x)for(int y=8;y<=10;++y)point(x,y);
-    for(int x=7;x<=8;++x)for(int y=4;y<=10;++y)point(x,y);
-    for(int x=11;x<=12;++x)for(int y=6;y<=10;++y)point(x,y);
-    return CreateIcon(GetModuleHandleW(nullptr),16,16,1,1,and_mask,xor_mask);
+    // Opaque blue monitor with a light border: visible on light and dark taskbars.
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth=16;
+    bi.bmiHeader.biHeight=-16;
+    bi.bmiHeader.biPlanes=1;
+    bi.bmiHeader.biBitCount=32;
+    bi.bmiHeader.biCompression=BI_RGB;
+    void* bits=nullptr;
+    HBITMAP color=CreateDIBSection(nullptr,&bi,DIB_RGB_COLORS,&bits,nullptr,0);
+    BYTE mask_bits[32]{};
+    HBITMAP mask=CreateBitmap(16,16,1,1,mask_bits);
+    HICON icon=nullptr;
+    if(color&&bits&&mask){
+        auto* pixels=static_cast<uint32_t*>(bits);
+        std::fill_n(pixels,256,0u);
+        auto point=[&](int x,int y,uint32_t c){pixels[y*16+x]=c;};
+        for(int y=1;y<=12;++y)for(int x=0;x<=15;++x)
+            point(x,y,(y==1||y==12||x==0||x==15)?0xff182b48u:0xff1764b0u);
+        for(int y=2;y<=11;++y)for(int x=1;x<=14;++x)
+            if(y==2||y==11||x==1||x==14)point(x,y,0xff9bcaffu);
+        for(int x=3;x<=4;++x)for(int y=8;y<=10;++y)point(x,y,0xffffffffu);
+        for(int x=7;x<=8;++x)for(int y=4;y<=10;++y)point(x,y,0xffffffffu);
+        for(int x=11;x<=12;++x)for(int y=6;y<=10;++y)point(x,y,0xffffffffu);
+        for(int x=7;x<=8;++x)for(int y=13;y<=14;++y)point(x,y,0xff315c91u);
+        for(int x=4;x<=11;++x)point(x,15,0xff315c91u);
+        ICONINFO info{};info.fIcon=TRUE;info.hbmMask=mask;info.hbmColor=color;
+        icon=CreateIconIndirect(&info);
+    }
+    if(mask)DeleteObject(mask);
+    if(color)DeleteObject(color);
+    return icon;
 }
 LRESULT CALLBACK wndproc(HWND hwnd,UINT msg,WPARAM w,LPARAM l){
     if(taskbar_created&&msg==taskbar_created){add_tray(hwnd);return 0;}
     switch(msg){
+    case WM_TIMER:
+        if(w==TrayRetry){add_tray(hwnd);return 0;}
+        return DefWindowProcW(hwnd,msg,w,l);
     case TrayMsg:
         if(l==WM_RBUTTONUP||l==WM_CONTEXTMENU){
             POINT p{};GetCursorPos(&p);HMENU menu=CreatePopupMenu();
@@ -46,7 +71,7 @@ LRESULT CALLBACK wndproc(HWND hwnd,UINT msg,WPARAM w,LPARAM l){
     case WM_QUERYENDSESSION:return TRUE;
     case WM_ENDSESSION:if(w)SetEvent(stop_event);return 0;
     case WM_CLOSE:DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:Shell_NotifyIconW(NIM_DELETE,&tray);SetEvent(stop_event);PostQuitMessage(0);return 0;
+    case WM_DESTROY:KillTimer(hwnd,TrayRetry);Shell_NotifyIconW(NIM_DELETE,&tray);SetEvent(stop_event);PostQuitMessage(0);return 0;
     default:return DefWindowProcW(hwnd,msg,w,l);
     }
 }
