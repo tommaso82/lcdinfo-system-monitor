@@ -15,6 +15,8 @@ The findings apply to our tested firmware revision; other units may differ. The 
 
 Target: Windows 7 through 11 (x86 and x64), with native Win32 APIs and WinUSB. CPU, RAM, GPU (when native WDDM counters are available), network receive/transmit rates, uptime and clock. The Big Digits layout is rendered on the host into a 1024-byte monochrome framebuffer. The program is intended to start directly in the notification area, with a right-click Exit menu. No brightness, contrast or EEPROM changes are needed.
 
+Distribution goal: one portable, statically linked executable per architecture, with embedded font and tray icon. No installer, external application DLLs or configuration files. Choose x86 or x64 for your system; the checksum is optional verification metadata. The Windows WinUSB driver binding remains a prerequisite.
+
 Windows 7/8 GPU utilization may be unavailable. A compatible WinUSB driver binding is required; the legacy D2XX binding is not interchangeable. No driver or firmware is installed by this project.
 
 ## Windows driver setup
