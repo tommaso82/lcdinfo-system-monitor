@@ -17,6 +17,10 @@ Target: Windows 7 through 11 (x86 and x64), with native Win32 APIs and WinUSB. C
 
 Windows 7/8 GPU utilization may be unavailable. A compatible WinUSB driver binding is required; the legacy D2XX binding is not interchangeable. No driver or firmware is installed by this project.
 
+## Windows driver setup
+
+The original FTDI driver must be replaced with a Microsoft WinUSB binding for this device. Follow the [Windows setup guide](docs/windows-setup.md) for hardware identification, recommended installation, checks and rollback. No firmware or EEPROM changes are necessary.
+
 See [protocol notes](docs/protocol.md) for independently established commands, firmware anomalies and safe workarounds. These notes are not a reproduction of the original manual.
 
 ## Status
