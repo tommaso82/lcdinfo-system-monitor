@@ -1,5 +1,6 @@
 #pragma once
 #include "render.hpp"
+#include "profile.hpp"
 #include <windows.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
@@ -9,19 +10,26 @@
 #include <cwchar>
 
 class Display {
+    diag::Profile& profile;
     HANDLE file=INVALID_HANDLE_VALUE;
     WINUSB_INTERFACE_HANDLE usb=nullptr;
     bool exchange(const uint8_t* data,size_t n,const uint8_t* expected,size_t want) {
         ULONG sent=0;
-        if(!WinUsb_WritePipe(usb,0x02,const_cast<PUCHAR>(data),ULONG(n),&sent,nullptr)||sent!=n) return false;
+        ++profile.usb_writes;profile.usb_out_requested+=n;
+        const BOOL written=WinUsb_WritePipe(usb,0x02,const_cast<PUCHAR>(data),ULONG(n),&sent,nullptr);
+        if(written)profile.usb_out_ok+=sent;
+        if(!written||sent!=n){++profile.usb_write_fail;return false;}
         size_t got=0;
         ULONGLONG deadline=GetTickCount64()+750;
         while(GetTickCount64()<deadline) {
             UCHAR buf[64]; ULONG count=0;
+            ++profile.usb_reads;
             if(!WinUsb_ReadPipe(usb,0x81,buf,sizeof buf,&count,nullptr)) {
-                if(GetLastError()==ERROR_SEM_TIMEOUT) continue;
-                return false;
+                const DWORD error=GetLastError();
+                if(error==ERROR_SEM_TIMEOUT){++profile.usb_read_timeout;continue;}
+                ++profile.usb_read_fail;return false;
             }
+            profile.usb_in_ok+=count;
             if(!count) continue;
             if(count<2||count-2>want-got) return false;
             for(ULONG i=2;i<count;++i) if(buf[i]!=expected[got++]) return false;
@@ -59,7 +67,7 @@ class Display {
         return false;
     }
 public:
-    Display()=default;
+    explicit Display(diag::Profile& p):profile(p){}
     Display(const Display&)=delete;
     Display& operator=(const Display&)=delete;
     ~Display(){close();}

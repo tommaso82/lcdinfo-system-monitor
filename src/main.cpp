@@ -17,7 +17,7 @@ HICON owned_icon=nullptr;
 void add_tray(HWND hwnd){
     tray={};tray.cbSize=sizeof tray;tray.hWnd=hwnd;tray.uID=1;
     tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=TrayMsg;
-    tray.hIcon=owned_icon;wcscpy_s(tray.szTip,L"LCDInfo System Monitor");
+    tray.hIcon=owned_icon;wcscpy_s(tray.szTip,L"LCDInfo System Monitor - profile");
     if(Shell_NotifyIconW(NIM_ADD,&tray)) KillTimer(hwnd,TrayRetry);
     else SetTimer(hwnd,TrayRetry,2000,nullptr);
 }
@@ -76,7 +76,9 @@ LRESULT CALLBACK wndproc(HWND hwnd,UINT msg,WPARAM w,LPARAM l){
     }
 }
 void worker(){
-    Display display;
+    diag::Profile profile;
+    for(int i=0;i<64;++i)profile.measure(diag::Stage::Probe,[]{});
+    Display display(profile);
     lcd::Frame previous{};bool synchronized=false;
     ULONGLONG reconnect_at=0;
     // No metric polling while the display is absent.
@@ -85,19 +87,27 @@ void worker(){
         ULONGLONG start=GetTickCount64();
         if(!display.connected()&&start>=reconnect_at){
             synchronized=false;
-            if(display.open())sampler=std::make_unique<Sampler>();
+            ++profile.connect_attempts;
+            if(profile.measure(diag::Stage::Connect,[&]{return display.open();})){
+                ++profile.connections;sampler=std::make_unique<Sampler>(profile);
+            }
             else reconnect_at=GetTickCount64()+3000;
         }
         if(display.connected()&&sampler){
-            auto frame=lcd::render(sampler->sample());
-            auto packet=lcd::encode(frame,synchronized?&previous:nullptr);
-            if(display.update(packet)){previous=frame;synchronized=true;}
-            else {display.close();sampler.reset();synchronized=false;reconnect_at=GetTickCount64()+3000;}
+            auto sample=sampler->sample();
+            auto frame=profile.measure(diag::Stage::Render,[&]{return lcd::render(sample);});
+            auto packet=profile.measure(diag::Stage::Encode,[&]{return lcd::encode(frame,synchronized?&previous:nullptr);});
+            if(packet.len)++profile.frames_changed;else ++profile.frames_unchanged;
+            if(profile.measure(diag::Stage::Usb,[&]{return display.update(packet);})){previous=frame;synchronized=true;}
+            else {++profile.update_failures;display.close();sampler.reset();synchronized=false;reconnect_at=GetTickCount64()+3000;}
         }
+        profile.report();
         ULONGLONG now=GetTickCount64();
+        if(display.connected()&&now-start>=500)++profile.overruns;
         DWORD delay=display.connected()?DWORD(now-start>=500?1:500-(now-start)):DWORD(reconnect_at>now?reconnect_at-now:1);
         if(WaitForSingleObject(stop_event,delay)!=WAIT_TIMEOUT)break;
     }
+    profile.report(true);
 }
 }
 int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR,int){

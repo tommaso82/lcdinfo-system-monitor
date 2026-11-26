@@ -1,5 +1,7 @@
 # LCDInfo System Monitor
 
+**Experimental profiling branch — not a release.** See [profiling instructions](docs/profiling.md).
+
 A lightweight native Windows system monitor for the vintage LCDInfo USB graphical LCD designed by Henri Skippari. This project began because the original software and exact firmware protocol were difficult to locate, and the available legacy plugins did not match our device. We independently reconstructed its USB protocol by observing actual transfers, responses and displayed pixels.
 
 ## Hardware

@@ -1,7 +1,7 @@
-name: Native Windows build
+name: Windows profile build
 on:
   push:
-    branches: [main]
+    branches: [development/profile]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -25,10 +25,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist
-          Copy-Item build/Release/LCDInfoSystemMonitor.exe dist/
-          $hash = (Get-FileHash dist/LCDInfoSystemMonitor.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  LCDInfoSystemMonitor.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Copy-Item build/Release/LCDInfoSystemMonitor-profile.exe dist/
+          $hash = (Get-FileHash dist/LCDInfoSystemMonitor-profile.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LCDInfoSystemMonitor-profile.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: LCDInfoSystemMonitor-${{ matrix.arch }}
+          name: LCDInfoSystemMonitor-profile-${{ matrix.arch }}
           path: dist/
