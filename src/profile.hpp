@@ -10,9 +10,9 @@
 
 namespace diag {
 enum class Stage { Core, Clock, NetApi, NetRest, GpuCollect, GpuFormat, GpuParse,
-                   Render, Encode, Usb, Connect, Probe, Count };
+                   Render, Encode, Usb, Connect, Probe, NetTotal, Count };
 inline constexpr const char* names[]={"cpu_ram","clock_uptime","net_api","net_rest",
-    "gpu_collect","gpu_format","gpu_parse","render","encode","usb_update","connect","probe"};
+    "gpu_collect","gpu_format","gpu_parse","render","encode","usb_update","connect","probe","net_total"};
 struct CpuTime { uint64_t ticks=0; bool valid=false; };
 inline uint64_t ft(FILETIME t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;}
 inline CpuTime cpu_time(bool process){
@@ -35,7 +35,7 @@ class Profile {
     static FILE* open_log(){
         SYSTEMTIME t{};GetLocalTime(&t);
         wchar_t name[128]{};
-        swprintf_s(name,L"lcdinfo-profile-%04u%02u%02u-%02u%02u%02u-%lu.log",
+        swprintf_s(name,L"lcdinfo-netcache-%04u%02u%02u-%02u%02u%02u-%lu.log",
             unsigned(t.wYear),unsigned(t.wMonth),unsigned(t.wDay),unsigned(t.wHour),
             unsigned(t.wMinute),unsigned(t.wSecond),GetCurrentProcessId());
         wchar_t path[32768]{};
@@ -65,13 +65,14 @@ public:
     uint64_t samples=0,gpu_missing=0,net_missing=0,frames_changed=0,frames_unchanged=0,
         update_failures=0,connect_attempts=0,connections=0,overruns=0,
         gpu_items=0,gpu_samples=0,gpu_max_items=0,net_rows=0,net_samples=0,net_max_rows=0,
+        net_scans=0,net_entries=0,net_scan_errors=0,net_entry_errors=0,
         usb_writes=0,usb_reads=0,usb_out_requested=0,usb_out_ok=0,usb_in_ok=0,
         usb_write_fail=0,usb_read_fail=0,usb_read_timeout=0;
     explicit Profile(bool enable_log=true){
         if(enable_log)file=open_log();
         start=last_report=qpc();process_start=cpu_time(true);worker_start=cpu_time(false);
         if(file){
-            fprintf(file,"LCDInfo 1.0.0-profile base=4387f1c logical_processors=%lu qpc_hz=%lld\n",
+            fprintf(file,"LCDInfo 1.0.0-netcache base=4387f1c logical_processors=%lu qpc_hz=%lld\n",
                     processors,(long long)hz);
             fprintf(file,"Cumulative totals; wall_ms and CPU_ms differ. Stage CPU accounting is coarse; cycles are not time. Probe measures empty instrumentation, not subtracted. USB bytes are WinUSB API counts, not on-wire framing. Startup included; subtract snapshots for steady state. No device data or process names logged.\n");
             fflush(file);
@@ -134,6 +135,9 @@ public:
         fprintf(file,"ITEMS gpu_samples=%llu gpu_items=%llu gpu_max_items=%llu net_samples=%llu net_rows=%llu net_max_rows=%llu\n",
             (unsigned long long)gpu_samples,(unsigned long long)gpu_items,(unsigned long long)gpu_max_items,
             (unsigned long long)net_samples,(unsigned long long)net_rows,(unsigned long long)net_max_rows);
+        fprintf(file,"NET scans=%llu entries=%llu scan_errors=%llu entry_errors=%llu\n",
+            (unsigned long long)net_scans,(unsigned long long)net_entries,
+            (unsigned long long)net_scan_errors,(unsigned long long)net_entry_errors);
         fprintf(file,"USB write_calls=%llu read_calls=%llu out_requested=%llu out_success_bytes=%llu in_success_bytes=%llu write_fail=%llu read_fail=%llu read_timeout=%llu\n\n",
             (unsigned long long)usb_writes,(unsigned long long)usb_reads,(unsigned long long)usb_out_requested,
             (unsigned long long)usb_out_ok,(unsigned long long)usb_in_ok,(unsigned long long)usb_write_fail,

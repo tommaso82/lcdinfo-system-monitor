@@ -1,6 +1,7 @@
 #pragma once
 #include "render.hpp"
 #include "profile.hpp"
+#include "network_cache.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -16,8 +17,7 @@ class Sampler {
     diag::Profile& profile;
     struct Cpu {uint64_t idle=0,kernel=0,user=0;};
     Cpu prev{};bool cpu_valid=false;
-    using Net=std::map<uint64_t,std::pair<uint64_t,uint64_t>>;
-    Net old;ULONGLONG last=0;
+    lcd::NetworkCache net;
     PDH_HQUERY query=nullptr;PDH_HCOUNTER gpu=nullptr;
     std::vector<uint64_t> pdh_storage;
     static uint64_t ft(FILETIME t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;}
@@ -31,27 +31,37 @@ class Sampler {
         }
         prev=now;cpu_valid=true;return result;
     }
-    void network(lcd::Metrics& m) {
-        PMIB_IF_TABLE2 table=nullptr;Net now;
-        ULONGLONG t=GetTickCount64();
-        auto status=profile.measure(diag::Stage::NetApi,[&]{return GetIfTable2(&table);});
-        diag::Profile::Scope measured(profile,diag::Stage::NetRest);
-        if(status!=NO_ERROR){old.clear();last=0;return;}
-        profile.note_net(table->NumEntries);
-        for(ULONG i=0;i<table->NumEntries;++i) {
-            const auto& r=table->Table[i];
-            if(r.OperStatus!=IfOperStatusUp||(r.Type!=IF_TYPE_ETHERNET_CSMACD&&r.Type!=IF_TYPE_IEEE80211)||!r.InterfaceAndOperStatusFlags.HardwareInterface||r.InterfaceAndOperStatusFlags.FilterInterface) continue;
-            now[r.InterfaceLuid.Value]={r.InOctets,r.OutOctets};
-        }
-        FreeMibTable(table);
-        if(last&&t>last){double rx=0,tx=0;bool any=false;
-            for(const auto& p:now){auto it=old.find(p.first);if(it==old.end())continue;
-                if(p.second.first<it->second.first||p.second.second<it->second.second)continue;
-                rx+=double(p.second.first-it->second.first);tx+=double(p.second.second-it->second.second);any=true;
+    static lcd::NetRow net_row(const MIB_IF_ROW2& r){
+        return {r.InterfaceLuid.Value,r.InOctets,r.OutOctets,
+            (r.Type==IF_TYPE_ETHERNET_CSMACD||r.Type==IF_TYPE_IEEE80211)&&
+                r.InterfaceAndOperStatusFlags.HardwareInterface&&!r.InterfaceAndOperStatusFlags.FilterInterface,
+            r.OperStatus==IfOperStatusUp};
+    }
+    void network(lcd::Metrics& m){
+        diag::Profile::Scope total(profile,diag::Stage::NetTotal);
+        const auto t=GetTickCount64();
+        // Measure API calls individually; net_rest is exclusive of API time.
+        // Profile the surrounding work by difference in the diagnostic log.
+        auto rate=net.sample(t,[&](std::vector<lcd::NetRow>& rows){
+            ++profile.net_scans;
+            PMIB_IF_TABLE2 table=nullptr;
+            auto status=profile.measure(diag::Stage::NetApi,[&]{return GetIfTable2(&table);});
+            if(status!=NO_ERROR){++profile.net_scan_errors;return false;}
+            diag::Profile::Scope measured(profile,diag::Stage::NetRest);
+            profile.note_net(table->NumEntries);
+            for(ULONG i=0;i<table->NumEntries;++i){
+                auto r=net_row(table->Table[i]);if(r.eligible)rows.push_back(r);
             }
-            if(any){m.rx=rx*1000.0/double(t-last);m.tx=tx*1000.0/double(t-last);}
-        }
-        old.swap(now);last=t;
+            FreeMibTable(table);
+            return true;
+        },[&](uint64_t id,lcd::NetRow& out){
+            ++profile.net_entries;
+            MIB_IF_ROW2 row{};row.InterfaceLuid.Value=id;
+            auto status=profile.measure(diag::Stage::NetApi,[&]{return GetIfEntry2(&row);});
+            if(status!=NO_ERROR){++profile.net_entry_errors;return false;}
+            out=net_row(row);return true;
+        });
+        m.rx=rate.rx;m.tx=rate.tx;
     }
     double gpu_load() {
         if(!query||profile.measure(diag::Stage::GpuCollect,[&]{return PdhCollectQueryData(query);})!=ERROR_SUCCESS)return -1;

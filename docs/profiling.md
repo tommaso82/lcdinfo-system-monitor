@@ -1,4 +1,4 @@
-# Diagnostic baseline — development/profile
+# Diagnostic optimization experiments
 
 Based on main 4387f1cf62faae0171847ff7748ecef430eaabd7. Instrumentation only: no changes to the rendering algorithm, sample frequency (500 ms), two-thread architecture, USB framing, addressing, timeouts, reconnect policy, GPU/network calculations, or persistent settings. USB source is changed only to count existing API calls and bytes. A diagnostic build has extra measurement and log overhead and is not a production benchmark.
 
@@ -13,3 +13,7 @@ Cumulative snapshots every ~10 seconds and on orderly worker exit. Startup and r
 Process/worker CPU totals from Win32, normalized process CPU percentage by active logical processors; private bytes, working set, handle count. Other OS/driver CPU outside process not measured. Process measurement starts after log creation, final snapshot before worker destruction; logging itself contributes overhead. No process names, per-engine identifiers, IP addresses or USB serials logged. Compare same workload and interval before choosing optimizations. No speedup claimed.
 
 CI runs existing 3000-frame test and profile accounting smoke test on x86/x64; physical LCD and Windows 7 behavior still require validation. No release publication from this branch.
+
+## Network-cache experiment
+
+Derived from c3e34c7. The full table is read at startup and every 5 seconds, caching eligible physical Ethernet/Wi-Fi LUIDs including down interfaces. Between scans GetIfEntry2 reads each cached row every 500 ms, rechecking the original eligibility and operational status. A failed or mismatched entry causes a same-sample full scan; a failed full scan invalidates the baseline and retries next sample. No interpolation, cached traffic values, extra thread, or changed rate formula. New or newly eligible adapters can take approximately 5 seconds to be discovered; existing eligible down adapters are still sampled. Counter resets and new adapters require a new baseline as before. NetApi measures both APIs; net_total includes the entire network sample and overlaps net_api/net_rest, so do not sum it with them. net_rest now measures full-scan filtering/free only; remaining work is included in net_total. NET counts scan attempts, direct entry attempts and API errors; ITEMS net_rows/net_samples now describe successful full scans only. No measured savings yet. See Microsoft GetIfEntry2 documentation: https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-getifentry2 .

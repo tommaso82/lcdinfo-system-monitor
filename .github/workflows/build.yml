@@ -1,7 +1,7 @@
-name: Windows profile build
+name: Windows optimization build
 on:
   push:
-    branches: [development/profile]
+    branches: [development/network-cache, development/pdh-buffer, development/gpu-parse]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -25,10 +25,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist
-          Copy-Item build/Release/LCDInfoSystemMonitor-profile.exe dist/
-          $hash = (Get-FileHash dist/LCDInfoSystemMonitor-profile.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  LCDInfoSystemMonitor-profile.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Copy-Item build/Release/LCDInfoSystemMonitor-netcache.exe dist/
+          $hash = (Get-FileHash dist/LCDInfoSystemMonitor-netcache.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LCDInfoSystemMonitor-netcache.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: LCDInfoSystemMonitor-profile-${{ matrix.arch }}
+          name: LCDInfoSystemMonitor-netcache-${{ matrix.arch }}
           path: dist/
