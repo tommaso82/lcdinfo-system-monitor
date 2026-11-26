@@ -1,5 +1,6 @@
 #pragma once
 #include "render.hpp"
+#include "power.hpp"
 #include <windows.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
@@ -11,11 +12,13 @@
 class Display {
     HANDLE file=INVALID_HANDLE_VALUE;
     WINUSB_INTERFACE_HANDLE usb=nullptr;
-    bool exchange(const uint8_t* data,size_t n,const uint8_t* expected,size_t want) {
+    bool exchange(const uint8_t* data,size_t n,const uint8_t* expected,size_t want,ULONGLONG limit=0) {
+        if(limit&&GetTickCount64()>=limit)return false;
         ULONG sent=0;
         if(!WinUsb_WritePipe(usb,0x02,const_cast<PUCHAR>(data),ULONG(n),&sent,nullptr)||sent!=n) return false;
         size_t got=0;
         ULONGLONG deadline=GetTickCount64()+750;
+        if(limit&&limit<deadline)deadline=limit;
         while(GetTickCount64()<deadline) {
             UCHAR buf[64]; ULONG count=0;
             if(!WinUsb_ReadPipe(usb,0x81,buf,sizeof buf,&count,nullptr)) {
@@ -91,6 +94,25 @@ public:
         }
         SetupDiDestroyDeviceInfoList(devices);
         return found;
+    }
+    // Best effort; the worker closes this handle immediately afterwards.
+    // Do not modify the timeout policies of normal frame transfers.
+    bool suspend_display(bool darken,ULONGLONG deadline){
+        if(!connected())return false;
+        const auto now=GetTickCount64();
+        if(now>=deadline||deadline-now<100)return false;
+        ULONG write_ms=static_cast<ULONG>((std::min)(deadline-now-50,ULONGLONG(200))),read_ms=50;
+        if(!WinUsb_SetPipePolicy(usb,0x02,PIPE_TRANSFER_TIMEOUT,sizeof write_ms,&write_ms)||
+           !WinUsb_SetPipePolicy(usb,0x81,PIPE_TRANSFER_TIMEOUT,sizeof read_ms,&read_ms))return false;
+        const auto p=lcd::sleep_packet(darken);
+        const uint8_t reply[]={0x40,0x80,0x80,0x40};
+        return exchange(p.bytes.data(),p.len,reply,sizeof reply,deadline-50);
+    }
+    bool restore_backlight(uint8_t value){
+        if(!connected())return false;
+        const auto p=lcd::wake_packet(value);
+        const uint8_t reply[]={0x40,0x80,0x80,0x40};
+        return exchange(p.bytes.data(),p.len,reply,sizeof reply);
     }
     bool update(const lcd::Packet& p) {
         if(!p.len) return true;

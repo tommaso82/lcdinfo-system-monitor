@@ -19,6 +19,12 @@ Distribution goal: one portable, statically linked executable per architecture, 
 
 Windows 7/8 GPU utilization may be unavailable. A compatible WinUSB driver binding is required; the legacy D2XX binding is not interchangeable. No driver or firmware is installed by this project.
 
+## Experimental power management
+
+This branch is a test build, not a release. On suspend/hibernate, clear the display and close USB. By default there are no backlight changes. Optional command-line argument `--backlight 180` (decimal 0–255) also turns off the backlight in RAM during suspend and restores the explicit value after resume; it does not change the startup brightness. No EEPROM writes or configuration files. Value 0 deliberately restores zero. Invalid arguments are rejected.
+
+The worker stops sampling while suspended, waits for an interruptible two-second settling period after resume, reopens USB and rebuilds the sampler and framebuffer. Failed opens or backlight restoration retry using the existing three-second reconnect interval. The UI waits at most approximately one second for best-effort suspend handling; a busy or unresponsive USB device may not blank before sleep. A marker verifies the firmware parser, not actual light output. No additional thread, periodic polling, or steady-state USB traffic. The added synchronization checks have not been benchmarked. Physical S3/S4 and combined command sequences still require validation.
+
 ## Windows driver setup
 
 The original FTDI driver must be replaced with a Microsoft WinUSB binding for this device. Follow the [Windows setup guide](docs/windows-setup.md) for hardware identification, recommended installation, checks and rollback. No firmware or EEPROM changes are necessary.

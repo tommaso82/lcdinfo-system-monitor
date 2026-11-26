@@ -10,7 +10,45 @@ namespace {
 constexpr UINT TrayMsg=WM_APP+1;
 constexpr UINT ExitId=100;
 constexpr UINT_PTR TrayRetry=1;
-HANDLE stop_event=nullptr;
+HANDLE stop_event=nullptr,power_event=nullptr,suspend_done=nullptr;
+SRWLOCK power_lock=SRWLOCK_INIT;
+lcd::PowerRequest power_request;
+int resume_backlight=-1; // No light commands unless explicitly configured.
+lcd::PowerRequest power_snapshot(){
+    AcquireSRWLockShared(&power_lock);
+    const auto p=power_request;
+    ReleaseSRWLockShared(&power_lock);
+    return p;
+}
+void on_suspend(){
+    AcquireSRWLockExclusive(&power_lock);
+    const bool changed=power_request.suspend(GetTickCount64());
+    if(changed){
+        ResetEvent(suspend_done);
+        SetEvent(power_event);
+    }
+    const auto deadline=power_request.deadline;
+    ReleaseSRWLockExclusive(&power_lock);
+    if(changed){
+        const auto now=GetTickCount64();
+        if(now<deadline)WaitForSingleObject(suspend_done,static_cast<DWORD>(deadline-now));
+    }
+}
+void on_resume(){
+    AcquireSRWLockExclusive(&power_lock);
+    if(power_request.resume(GetTickCount64()))SetEvent(power_event);
+    ReleaseSRWLockExclusive(&power_lock);
+}
+void acknowledge_suspend(uint64_t generation){
+    AcquireSRWLockExclusive(&power_lock);
+    if(power_request.suspended&&power_request.generation==generation)SetEvent(suspend_done);
+    ReleaseSRWLockExclusive(&power_lock);
+}
+void close_events(){
+    if(suspend_done)CloseHandle(suspend_done);
+    if(power_event)CloseHandle(power_event);
+    if(stop_event)CloseHandle(stop_event);
+}
 UINT taskbar_created=0;
 NOTIFYICONDATAW tray{};
 HICON owned_icon=nullptr;
@@ -68,6 +106,11 @@ LRESULT CALLBACK wndproc(HWND hwnd,UINT msg,WPARAM w,LPARAM l){
                 UINT cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON|TPM_NONOTIFY,p.x,p.y,0,hwnd,nullptr);
                 DestroyMenu(menu);PostMessageW(hwnd,WM_NULL,0,0);if(cmd==ExitId)DestroyWindow(hwnd);}
         }return 0;
+    case WM_POWERBROADCAST:
+        if(w==PBT_APMSUSPEND){on_suspend();return TRUE;}
+        if(w==PBT_APMRESUMEAUTOMATIC){on_resume();return TRUE;}
+        if(w==PBT_APMRESUMESUSPEND)return TRUE; // Automatic notification already handled.
+        return DefWindowProcW(hwnd,msg,w,l);
     case WM_QUERYENDSESSION:return TRUE;
     case WM_ENDSESSION:if(w)SetEvent(stop_event);return 0;
     case WM_CLOSE:DestroyWindow(hwnd);return 0;
@@ -77,45 +120,88 @@ LRESULT CALLBACK wndproc(HWND hwnd,UINT msg,WPARAM w,LPARAM l){
 }
 void worker(){
     Display display;
-    lcd::Frame previous{};bool synchronized=false;
+    lcd::Frame previous{};bool synchronized=false,restore_pending=false;
     ULONGLONG reconnect_at=0;
-    // No metric polling while the display is absent.
+    uint64_t generation=0;
     std::unique_ptr<Sampler> sampler;
+    const HANDLE events[]={stop_event,power_event};
+    // Only the worker owns USB and Sampler. The UI never performs USB I/O.
     while(WaitForSingleObject(stop_event,0)==WAIT_TIMEOUT){
-        ULONGLONG start=GetTickCount64();
+        const auto request=power_snapshot();
+        if(request.generation!=generation){
+            generation=request.generation;
+            if(request.suspended&&display.connected())
+                display.suspend_display(resume_backlight>=0,request.deadline);
+            display.close();sampler.reset();synchronized=false;
+            if(request.suspended)acknowledge_suspend(generation);
+            else {
+                reconnect_at=request.deadline;
+                restore_pending=resume_backlight>=0;
+            }
+        }
+        if(request.suspended){
+            if(WaitForMultipleObjects(2,events,FALSE,INFINITE)!=WAIT_OBJECT_0+1)break;
+            continue;
+        }
+        const ULONGLONG start=GetTickCount64();
         if(!display.connected()&&start>=reconnect_at){
             synchronized=false;
-            if(display.open())sampler=std::make_unique<Sampler>();
-            else reconnect_at=GetTickCount64()+3000;
+            if(display.open()){
+                if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
+                if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
+                if(restore_pending&&!display.restore_backlight(static_cast<uint8_t>(resume_backlight))){
+                    display.close();reconnect_at=GetTickCount64()+3000;
+                }else{
+                    restore_pending=false;
+                    sampler=std::make_unique<Sampler>();
+                }
+            }else reconnect_at=GetTickCount64()+3000;
         }
+        // A notification during open/restore or sampling takes priority over a frame.
+        if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
+        if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
+        if(display.connected()&&!sampler)sampler=std::make_unique<Sampler>();
         if(display.connected()&&sampler){
             auto frame=lcd::render(sampler->sample());
             auto packet=lcd::encode(frame,synchronized?&previous:nullptr);
+            if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
             if(display.update(packet)){previous=frame;synchronized=true;}
             else {display.close();sampler.reset();synchronized=false;reconnect_at=GetTickCount64()+3000;}
         }
-        ULONGLONG now=GetTickCount64();
-        DWORD delay=display.connected()?DWORD(now-start>=500?1:500-(now-start)):DWORD(reconnect_at>now?reconnect_at-now:1);
-        if(WaitForSingleObject(stop_event,delay)!=WAIT_TIMEOUT)break;
+        const ULONGLONG now=GetTickCount64();
+        const DWORD delay=display.connected()?DWORD(now-start>=500?1:500-(now-start)):DWORD(reconnect_at>now?reconnect_at-now:1);
+        const DWORD wait=WaitForMultipleObjects(2,events,FALSE,delay);
+        if(wait!=WAIT_TIMEOUT&&wait!=WAIT_OBJECT_0+1)break;
     }
 }
 }
 int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR,int){
+    int argc=0;
+    LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    if(!argv)return 1;
+    const bool valid=argc==1||(argc==3&&std::wstring_view(argv[1])==L"--backlight"&&lcd::parse_backlight(argv[2],resume_backlight));
+    LocalFree(argv);
+    if(!valid){
+        MessageBoxW(nullptr,L"Usage: LCDInfoSystemMonitor.exe [--backlight 0..255]",L"LCDInfo System Monitor",MB_OK|MB_ICONERROR);
+        return 1;
+    }
     HANDLE mutex=CreateMutexW(nullptr,FALSE,L"Local\\LCDInfoSystemMonitor");
     if(!mutex)return 1;
     if(GetLastError()==ERROR_ALREADY_EXISTS){CloseHandle(mutex);return 0;}
     stop_event=CreateEventW(nullptr,TRUE,FALSE,nullptr);
-    if(!stop_event){CloseHandle(mutex);return 1;}
+    power_event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    suspend_done=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+    if(!stop_event||!power_event||!suspend_done){close_events();CloseHandle(mutex);return 1;}
     taskbar_created=RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSW wc{};wc.lpfnWndProc=wndproc;wc.hInstance=h;wc.lpszClassName=L"LCDInfoSystemMonitorTray";
-    if(!RegisterClassW(&wc)){CloseHandle(stop_event);CloseHandle(mutex);return 1;}
+    if(!RegisterClassW(&wc)){close_events();CloseHandle(mutex);return 1;}
     HWND hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,wc.lpszClassName,L"LCDInfo System Monitor",WS_POPUP,0,0,0,0,nullptr,nullptr,h,nullptr);
-    if(!hwnd){CloseHandle(stop_event);CloseHandle(mutex);return 1;}
+    if(!hwnd){close_events();CloseHandle(mutex);return 1;}
     owned_icon=make_icon();if(!owned_icon)owned_icon=CopyIcon(LoadIconW(nullptr,IDI_APPLICATION));
     add_tray(hwnd);
     std::thread thread(worker);
     MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}
     SetEvent(stop_event);thread.join();Shell_NotifyIconW(NIM_DELETE,&tray);
     if(owned_icon)DestroyIcon(owned_icon);
-    CloseHandle(stop_event);CloseHandle(mutex);return 0;
+    close_events();CloseHandle(mutex);return 0;
 }
