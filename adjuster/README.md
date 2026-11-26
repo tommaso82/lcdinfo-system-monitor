@@ -1,0 +1,11 @@
+# LCDInfo Display Adjuster
+
+Standalone native Windows utility. Separate source tree and CI, no changes to System Monitor, its build or release. Uses the same validated WinUSB discovery for the LCDInfo USB display (0403:E300, CFAG12864B 128x64).
+
+Close System Monitor first (exclusive USB access). Run the adjuster from a writable folder. Up/Down change contrast by one, Left/Right change backlight by one. Hold a key for normal Windows keyboard repetition; no periodic sampling, no deliberate delay for temporary settings. The USB command and parser marker are synchronous, so an unresponsive device may briefly block the window before the utility disconnects and disables adjustments. No graphics commands or screen clearing. Valid marker is not a setting readback. Values 0–255 are byte limits; optical/electrical behavior at extremes is not fully characterized.
+
+On launch, load LCDInfoDisplayAdjuster.ini beside the EXE, or use reference 175/127 (last recorded persistent write, not hardware readback). No setting is written on opening or connecting. Apply both temporarily to establish a known reference, then adjust visually. Restore applies the saved/reference pair temporarily. Save is enabled after both values have been sent; confirmation writes both persistent settings once, using a 1.5 s guard after each and checking the parser before and after. No automatic retry or repeated EEPROM writes. Closing does not restore settings or save. Temporary values remain until reset or power cycle.
+
+An INI is staged before permanent writes; the previous file is atomically replaced only after both commands and markers succeed. If a write fails, the device may have been partially updated; the old INI remains. If replacement fails after device writes, the staged INI is retained and its location reported. The file records requested values, not a readback. Verify persistence with a physical power cycle. A successful save disables Save until further temporary adjustment. The INI is local to this utility; no logging, background process, driver changes, or settings modifications by System Monitor.
+
+Build separately: cmake -S adjuster -B build-adjuster -A x64 (or Win32), then build Release and run ctest. Windows 7–11 target; hardware testing and timing measurements still needed.
