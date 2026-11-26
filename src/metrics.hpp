@@ -2,6 +2,7 @@
 #include "render.hpp"
 #include "profile.hpp"
 #include "network_cache.hpp"
+#include "pdh_buffer.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -65,34 +66,27 @@ class Sampler {
     }
     double gpu_load() {
         if(!query||profile.measure(diag::Stage::GpuCollect,[&]{return PdhCollectQueryData(query);})!=ERROR_SUCCESS)return -1;
-        DWORD bytes=0,count=0;PDH_STATUS rc=profile.measure(diag::Stage::GpuFormat,[&]{return PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,&bytes,&count,nullptr);});
-        if(rc!=PDH_MORE_DATA||!bytes||bytes>32*1024*1024)return -1;
-        for(int retry=0;retry<3;++retry){
-            PDH_FMT_COUNTERVALUE_ITEM_W* items=nullptr;DWORD capacity=0;
-            rc=profile.measure(diag::Stage::GpuFormat,[&]{
-                pdh_storage.resize((bytes+7)/8);
-                items=reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(pdh_storage.data());
-                capacity=DWORD(pdh_storage.size()*8);
-                return PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,&capacity,&count,items);
+        DWORD count=0;
+        if(!lcd::formatted_array(pdh_storage,count,[&](DWORD* bytes,DWORD* n,PDH_FMT_COUNTERVALUE_ITEM_W* items){
+            return profile.measure(diag::Stage::GpuFormat,[&]{
+                return PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,bytes,n,items);
             });
-            if(rc==PDH_MORE_DATA&&capacity>0&&capacity<=32*1024*1024){bytes=capacity;continue;}
-            if(rc!=ERROR_SUCCESS||count>pdh_storage.size()*8/sizeof(*items))return -1;
-            diag::Profile::Scope measured(profile,diag::Stage::GpuParse);
-            profile.note_gpu(count);
-            std::map<std::wstring,double> engines;
-            for(DWORD i=0;i<count;++i){
-                const auto& v=items[i].FmtValue;
-                if((v.CStatus!=0&&v.CStatus!=1)||!items[i].szName||!std::isfinite(v.doubleValue))continue;
-                std::wstring name(items[i].szName);
-                size_t a=name.find(L"luid_"),b=name.find(L"_eng_",a);
-                if(a==std::wstring::npos||b==std::wstring::npos)continue;
-                size_t end=name.find(L'_',b+5);
-                engines[name.substr(a,end==std::wstring::npos?end:end-a)]+=std::max(0.0,v.doubleValue);
-            }
-            double result=-1;for(const auto& p:engines)result=std::max(result,p.second);
-            return result<0?-1:lcd::clamp(result);
+        }))return -1;
+        auto* items=reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(pdh_storage.data());
+        diag::Profile::Scope measured(profile,diag::Stage::GpuParse);
+        profile.note_gpu(count);
+        std::map<std::wstring,double> engines;
+        for(DWORD i=0;i<count;++i){
+            const auto& v=items[i].FmtValue;
+            if((v.CStatus!=0&&v.CStatus!=1)||!items[i].szName||!std::isfinite(v.doubleValue))continue;
+            std::wstring name(items[i].szName);
+            size_t a=name.find(L"luid_"),b=name.find(L"_eng_",a);
+            if(a==std::wstring::npos||b==std::wstring::npos)continue;
+            size_t end=name.find(L'_',b+5);
+            engines[name.substr(a,end==std::wstring::npos?end:end-a)]+=std::max(0.0,v.doubleValue);
         }
-        return -1;
+        double result=-1;for(const auto& p:engines)result=std::max(result,p.second);
+        return result<0?-1:lcd::clamp(result);
     }
 public:
     explicit Sampler(diag::Profile& p):profile(p){
