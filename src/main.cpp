@@ -17,7 +17,7 @@ HICON owned_icon=nullptr;
 void add_tray(HWND hwnd){
     tray={};tray.cbSize=sizeof tray;tray.hWnd=hwnd;tray.uID=1;
     tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=TrayMsg;
-    tray.hIcon=owned_icon;wcscpy_s(tray.szTip,L"LCDInfo System Monitor - pdhbuffer");
+    tray.hIcon=owned_icon;wcscpy_s(tray.szTip,L"LCDInfo System Monitor - gpuparse");
     if(Shell_NotifyIconW(NIM_ADD,&tray)) KillTimer(hwnd,TrayRetry);
     else SetTimer(hwnd,TrayRetry,2000,nullptr);
 }

@@ -3,14 +3,13 @@
 #include "profile.hpp"
 #include "network_cache.hpp"
 #include "pdh_buffer.hpp"
+#include "gpu_engines.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
-#include <map>
-#include <string>
 #include <vector>
 #include <utility>
 
@@ -21,6 +20,7 @@ class Sampler {
     lcd::NetworkCache net;
     PDH_HQUERY query=nullptr;PDH_HCOUNTER gpu=nullptr;
     std::vector<uint64_t> pdh_storage;
+    lcd::GpuEngines gpu_engines;
     static uint64_t ft(FILETIME t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;}
     double cpu_load() {
         FILETIME i{},k{},u{};
@@ -65,6 +65,7 @@ class Sampler {
         m.rx=rate.rx;m.tx=rate.tx;
     }
     double gpu_load() {
+        gpu_engines.clear();
         if(!query||profile.measure(diag::Stage::GpuCollect,[&]{return PdhCollectQueryData(query);})!=ERROR_SUCCESS)return -1;
         DWORD count=0;
         if(!lcd::formatted_array(pdh_storage,count,[&](DWORD* bytes,DWORD* n,PDH_FMT_COUNTERVALUE_ITEM_W* items){
@@ -75,17 +76,13 @@ class Sampler {
         auto* items=reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(pdh_storage.data());
         diag::Profile::Scope measured(profile,diag::Stage::GpuParse);
         profile.note_gpu(count);
-        std::map<std::wstring,double> engines;
         for(DWORD i=0;i<count;++i){
             const auto& v=items[i].FmtValue;
             if((v.CStatus!=0&&v.CStatus!=1)||!items[i].szName||!std::isfinite(v.doubleValue))continue;
-            std::wstring name(items[i].szName);
-            size_t a=name.find(L"luid_"),b=name.find(L"_eng_",a);
-            if(a==std::wstring::npos||b==std::wstring::npos)continue;
-            size_t end=name.find(L'_',b+5);
-            engines[name.substr(a,end==std::wstring::npos?end:end-a)]+=std::max(0.0,v.doubleValue);
+            gpu_engines.add(items[i].szName,v.doubleValue);
         }
-        double result=-1;for(const auto& p:engines)result=std::max(result,p.second);
+        const double result=gpu_engines.maximum();
+        gpu_engines.clear();
         return result<0?-1:lcd::clamp(result);
     }
 public:

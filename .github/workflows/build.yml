@@ -25,10 +25,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist
-          Copy-Item build/Release/LCDInfoSystemMonitor-pdhbuffer.exe dist/
-          $hash = (Get-FileHash dist/LCDInfoSystemMonitor-pdhbuffer.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  LCDInfoSystemMonitor-pdhbuffer.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Copy-Item build/Release/LCDInfoSystemMonitor-gpuparse.exe dist/
+          $hash = (Get-FileHash dist/LCDInfoSystemMonitor-gpuparse.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LCDInfoSystemMonitor-gpuparse.exe" | Set-Content -Encoding ascii dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: LCDInfoSystemMonitor-pdhbuffer-${{ matrix.arch }}
+          name: LCDInfoSystemMonitor-gpuparse-${{ matrix.arch }}
           path: dist/

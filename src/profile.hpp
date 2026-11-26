@@ -35,7 +35,7 @@ class Profile {
     static FILE* open_log(){
         SYSTEMTIME t{};GetLocalTime(&t);
         wchar_t name[128]{};
-        swprintf_s(name,L"lcdinfo-pdhbuffer-%04u%02u%02u-%02u%02u%02u-%lu.log",
+        swprintf_s(name,L"lcdinfo-gpuparse-%04u%02u%02u-%02u%02u%02u-%lu.log",
             unsigned(t.wYear),unsigned(t.wMonth),unsigned(t.wDay),unsigned(t.wHour),
             unsigned(t.wMinute),unsigned(t.wSecond),GetCurrentProcessId());
         wchar_t path[32768]{};
@@ -72,7 +72,7 @@ public:
         if(enable_log)file=open_log();
         start=last_report=qpc();process_start=cpu_time(true);worker_start=cpu_time(false);
         if(file){
-            fprintf(file,"LCDInfo 1.0.0-pdhbuffer base=4387f1c logical_processors=%lu qpc_hz=%lld\n",
+            fprintf(file,"LCDInfo 1.0.0-gpuparse base=4387f1c logical_processors=%lu qpc_hz=%lld\n",
                     processors,(long long)hz);
             fprintf(file,"Cumulative totals; wall_ms and CPU_ms differ. Stage CPU accounting is coarse; cycles are not time. Probe measures empty instrumentation, not subtracted. USB bytes are WinUSB API counts, not on-wire framing. Startup included; subtract snapshots for steady state. No device data or process names logged.\n");
             fflush(file);
