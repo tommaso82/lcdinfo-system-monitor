@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string_view>
+#include <initializer_list>
 
 namespace lcd {
 constexpr uint64_t suspend_budget_ms=1000;
@@ -40,7 +41,7 @@ inline PowerPacket sleep_packet(bool darken){
     PowerPacket p;
     p.bytes[p.len++]=0x04;
     if(darken){p.bytes[p.len++]=0x0d;p.bytes[p.len++]=0;}
-    for(uint8_t b:{0x03,0x02,0x02,0x03})p.bytes[p.len++]=b;
+    for(uint8_t b:std::array<uint8_t,4>{0x03,0x02,0x02,0x03})p.bytes[p.len++]=b;
     return p;
 }
 inline PowerPacket wake_packet(uint8_t value){

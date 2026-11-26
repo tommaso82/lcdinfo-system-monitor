@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <initializer_list>
 void require(bool b){if(!b)std::exit(1);}
 void packet(lcd::PowerPacket p,std::initializer_list<uint8_t> expected){

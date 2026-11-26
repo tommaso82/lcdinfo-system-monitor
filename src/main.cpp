@@ -144,27 +144,31 @@ void worker(){
             continue;
         }
         const ULONGLONG start=GetTickCount64();
+        if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
         if(!display.connected()&&start>=reconnect_at){
             synchronized=false;
-            if(display.open()){
-                if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
-                if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
-                if(restore_pending&&!display.restore_backlight(static_cast<uint8_t>(resume_backlight))){
-                    display.close();reconnect_at=GetTickCount64()+3000;
-                }else{
-                    restore_pending=false;
-                    sampler=std::make_unique<Sampler>();
-                }
-            }else reconnect_at=GetTickCount64()+3000;
+            if(!display.open())reconnect_at=GetTickCount64()+3000;
         }
-        // A notification during open/restore or sampling takes priority over a frame.
+        // A notification during open takes priority over restoring settings.
         if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
         if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
-        if(display.connected()&&!sampler)sampler=std::make_unique<Sampler>();
+        // Keep restoration pending until it succeeds, even when a stale wake
+        // signal interrupted the preceding successful open.
+        if(display.connected()&&!sampler){
+            if(restore_pending&&!display.restore_backlight(static_cast<uint8_t>(resume_backlight))){
+                display.close();reconnect_at=GetTickCount64()+3000;
+            }else{
+                restore_pending=false;
+                if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
+                if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
+                sampler=std::make_unique<Sampler>();
+            }
+        }
         if(display.connected()&&sampler){
             auto frame=lcd::render(sampler->sample());
             auto packet=lcd::encode(frame,synchronized?&previous:nullptr);
             if(WaitForSingleObject(power_event,0)==WAIT_OBJECT_0)continue;
+            if(WaitForSingleObject(stop_event,0)!=WAIT_TIMEOUT)break;
             if(display.update(packet)){previous=frame;synchronized=true;}
             else {display.close();sampler.reset();synchronized=false;reconnect_at=GetTickCount64()+3000;}
         }
