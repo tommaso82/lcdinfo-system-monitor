@@ -1,7 +1,7 @@
 name: Native Windows build
 on:
   push:
-    branches: [main]
+    branches: [main, development/release-v1.1.0]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -32,3 +32,54 @@ jobs:
         with:
           name: LCDInfoSystemMonitor-${{ matrix.arch }}
           path: dist/
+  publish-v1-1-0:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release v1.1.0:')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-v1.1.0
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LCDInfoSystemMonitor-x64
+          path: x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: LCDInfoSystemMonitor-Win32
+          path: x86
+      - name: Verify checksums and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v1.1.0 --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release already exists; no changes made."
+            exit 0
+          fi
+          (cd x64 && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -)
+          (cd x86 && tr -d '\r' < SHA256SUMS.txt | sha256sum -c -)
+          mkdir dist
+          cp x64/LCDInfoSystemMonitor.exe dist/LCDInfoSystemMonitor-x64.exe
+          cp x86/LCDInfoSystemMonitor.exe dist/LCDInfoSystemMonitor-x86.exe
+          (cd dist && sha256sum *.exe > SHA256SUMS.txt)
+          cat > notes.md <<'EOF'
+          Performance and efficiency release for the LCDInfo USB display (0403:E300).
+
+          - Cache physical network interfaces; full discovery every five seconds, counters every 500 ms, immediate fallback on read failure.
+          - Reuse PDH formatted counter storage and GPU engine aggregation storage.
+          - Unchanged 500 ms sampling, graphics, USB protocol, differential updates and two application threads.
+          - No diagnostic logging, extra runtime dependencies or configuration files.
+
+          Diagnostic measurements on a six-logical-processor Windows 10 PC showed approximately 65% lower process CPU use (0.35% to 0.12%). These were different-duration, different-workload runs, not a controlled A/B benchmark; production CPU usage has not been separately measured.
+
+          Both architectures must pass the framebuffer, network-cache, PDH-buffer and GPU aggregation tests before publication. New network interfaces may take about five seconds to be detected. Windows 7–11 remains the compatibility target, with native GPU counters dependent on OS/driver support.
+
+          Choose the portable executable for your architecture. A [WinUSB binding](https://github.com/tommaso82/lcdinfo-system-monitor/blob/v1.1.0/docs/windows-setup.md) is required. SHA256SUMS.txt is optional verification metadata.
+          EOF
+          gh release create v1.1.0 dist/* --repo "$GH_REPO" --target "$SOURCE_SHA" --title "LCDInfo System Monitor v1.1.0" --notes-file notes.md

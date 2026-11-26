@@ -1,23 +1,24 @@
 #pragma once
 #include "render.hpp"
+#include "network_cache.hpp"
+#include "pdh_buffer.hpp"
+#include "gpu_engines.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
-#include <map>
-#include <string>
 #include <vector>
 #include <utility>
 
 class Sampler {
     struct Cpu {uint64_t idle=0,kernel=0,user=0;};
     Cpu prev{};bool cpu_valid=false;
-    using Net=std::map<uint64_t,std::pair<uint64_t,uint64_t>>;
-    Net old;ULONGLONG last=0;
+    lcd::NetworkCache net;
     PDH_HQUERY query=nullptr;PDH_HCOUNTER gpu=nullptr;
     std::vector<uint64_t> pdh_storage;
+    lcd::GpuEngines gpu_engines;
     static uint64_t ft(FILETIME t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;}
     double cpu_load() {
         FILETIME i{},k{},u{};
@@ -29,50 +30,45 @@ class Sampler {
         }
         prev=now;cpu_valid=true;return result;
     }
-    void network(lcd::Metrics& m) {
-        PMIB_IF_TABLE2 table=nullptr;Net now;
-        ULONGLONG t=GetTickCount64();
-        if(GetIfTable2(&table)!=NO_ERROR){old.clear();last=0;return;}
-        for(ULONG i=0;i<table->NumEntries;++i) {
-            const auto& r=table->Table[i];
-            if(r.OperStatus!=IfOperStatusUp||(r.Type!=IF_TYPE_ETHERNET_CSMACD&&r.Type!=IF_TYPE_IEEE80211)||!r.InterfaceAndOperStatusFlags.HardwareInterface||r.InterfaceAndOperStatusFlags.FilterInterface) continue;
-            now[r.InterfaceLuid.Value]={r.InOctets,r.OutOctets};
-        }
-        FreeMibTable(table);
-        if(last&&t>last){double rx=0,tx=0;bool any=false;
-            for(const auto& p:now){auto it=old.find(p.first);if(it==old.end())continue;
-                if(p.second.first<it->second.first||p.second.second<it->second.second)continue;
-                rx+=double(p.second.first-it->second.first);tx+=double(p.second.second-it->second.second);any=true;
+    static lcd::NetRow net_row(const MIB_IF_ROW2& r){
+        return {r.InterfaceLuid.Value,r.InOctets,r.OutOctets,
+            (r.Type==IF_TYPE_ETHERNET_CSMACD||r.Type==IF_TYPE_IEEE80211)&&
+                r.InterfaceAndOperStatusFlags.HardwareInterface&&!r.InterfaceAndOperStatusFlags.FilterInterface,
+            r.OperStatus==IfOperStatusUp};
+    }
+    void network(lcd::Metrics& m){
+        const auto t=GetTickCount64();
+        auto rate=net.sample(t,[&](std::vector<lcd::NetRow>& rows){
+            PMIB_IF_TABLE2 table=nullptr;
+            if(GetIfTable2(&table)!=NO_ERROR)return false;
+            for(ULONG i=0;i<table->NumEntries;++i){
+                auto r=net_row(table->Table[i]);if(r.eligible)rows.push_back(r);
             }
-            if(any){m.rx=rx*1000.0/double(t-last);m.tx=tx*1000.0/double(t-last);}
-        }
-        old.swap(now);last=t;
+            FreeMibTable(table);
+            return true;
+        },[&](uint64_t id,lcd::NetRow& out){
+            MIB_IF_ROW2 row{};row.InterfaceLuid.Value=id;
+            if(GetIfEntry2(&row)!=NO_ERROR)return false;
+            out=net_row(row);return true;
+        });
+        m.rx=rate.rx;m.tx=rate.tx;
     }
     double gpu_load() {
+        gpu_engines.clear();
         if(!query||PdhCollectQueryData(query)!=ERROR_SUCCESS)return -1;
-        DWORD bytes=0,count=0;PDH_STATUS rc=PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,&bytes,&count,nullptr);
-        if(rc!=PDH_MORE_DATA||!bytes||bytes>32*1024*1024)return -1;
-        for(int retry=0;retry<3;++retry){
-            pdh_storage.resize((bytes+7)/8);
-            auto* items=reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(pdh_storage.data());
-            DWORD capacity=DWORD(pdh_storage.size()*8);
-            rc=PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,&capacity,&count,items);
-            if(rc==PDH_MORE_DATA&&capacity>0&&capacity<=32*1024*1024){bytes=capacity;continue;}
-            if(rc!=ERROR_SUCCESS||count>pdh_storage.size()*8/sizeof(*items))return -1;
-            std::map<std::wstring,double> engines;
-            for(DWORD i=0;i<count;++i){
-                const auto& v=items[i].FmtValue;
-                if((v.CStatus!=0&&v.CStatus!=1)||!items[i].szName||!std::isfinite(v.doubleValue))continue;
-                std::wstring name(items[i].szName);
-                size_t a=name.find(L"luid_"),b=name.find(L"_eng_",a);
-                if(a==std::wstring::npos||b==std::wstring::npos)continue;
-                size_t end=name.find(L'_',b+5);
-                engines[name.substr(a,end==std::wstring::npos?end:end-a)]+=std::max(0.0,v.doubleValue);
-            }
-            double result=-1;for(const auto& p:engines)result=std::max(result,p.second);
-            return result<0?-1:lcd::clamp(result);
+        DWORD count=0;
+        if(!lcd::formatted_array(pdh_storage,count,[&](DWORD* bytes,DWORD* n,PDH_FMT_COUNTERVALUE_ITEM_W* items){
+            return PdhGetFormattedCounterArrayW(gpu,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,bytes,n,items);
+        }))return -1;
+        auto* items=reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(pdh_storage.data());
+        for(DWORD i=0;i<count;++i){
+            const auto& v=items[i].FmtValue;
+            if((v.CStatus!=0&&v.CStatus!=1)||!items[i].szName||!std::isfinite(v.doubleValue))continue;
+            gpu_engines.add(items[i].szName,v.doubleValue);
         }
-        return -1;
+        const double result=gpu_engines.maximum();
+        gpu_engines.clear();
+        return result<0?-1:lcd::clamp(result);
     }
 public:
     Sampler(){

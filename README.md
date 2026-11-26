@@ -27,4 +27,4 @@ See [protocol notes](docs/protocol.md) for independently established commands, f
 
 ## Status
 
-Initial native port under development; Windows and physical-device validation are required before claiming compatibility. No original driver binaries, firmware, device serial numbers or personal logs are included.
+v1.1.0 retains 500 ms sampling and differential display updates, while reducing network enumeration and GPU counter overhead. On the tested Windows 10 six-logical-processor PC, diagnostic runs showed approximately 65% lower process CPU use (0.35% to 0.12%; different workloads and durations, not a controlled A/B benchmark). The production build contains no profiling or log output. Windows 7–11 remains the compatibility target; older systems are not physically verified. See [releases](https://github.com/tommaso82/lcdinfo-system-monitor/releases). No original driver binaries, firmware, device serial numbers or personal logs are included.
